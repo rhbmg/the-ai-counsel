@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 from typing import List, Dict, Any, Literal, Optional
 import logging
 import os
@@ -270,6 +271,38 @@ def _save_partial_results(
     )
 
 app = FastAPI(title="The AI Counsel API")
+
+# Optional demo Basic Auth, gating the whole app (frontend + API) behind a
+# single username/password. Only active when both DEMO_USER and DEMO_PASS are
+# set (e.g. on the public Render demo deployment); disabled otherwise.
+_DEMO_USER = os.getenv("DEMO_USER", "").strip()
+_DEMO_PASS = os.getenv("DEMO_PASS", "").strip()
+_BASIC_AUTH_EXEMPT_PATHS = {"/api/health"}
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not _DEMO_USER or not _DEMO_PASS or request.url.path in _BASIC_AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(auth.split(" ", 1)[1]).decode()
+                user, _, pwd = decoded.partition(":")
+                if secrets.compare_digest(user, _DEMO_USER) and secrets.compare_digest(pwd, _DEMO_PASS):
+                    return await call_next(request)
+            except Exception:
+                pass
+
+        return Response(
+            content="Authentication required",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Demo"'},
+        )
+
+
+app.add_middleware(BasicAuthMiddleware)
 
 # Sensitive settings endpoints (export/import/reset) leak or wipe API keys, so
 # they MUST be authenticated. Behavior:

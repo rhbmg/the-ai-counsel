@@ -3,8 +3,9 @@ services:
     image: the-ai-counsel
     build: .
     ports:
-      - "${PORT:-8001}:8001"
+      - "${PORT:-8001}:${PORT:-8001}"
     environment:
+      PORT: "${PORT:-8001}"
       # Leave empty when serving frontend and API from this container.
       # Set to a full URL when the frontend is served elsewhere, for example:
       # BACKEND_HOST=https://api.example.com
@@ -15,6 +16,9 @@ services:
       # Optional: TinyFish search API key (free tier, 5 req/min).
       # Get a key at https://agent.tinyfish.ai/api-keys
       TINYFISH_API_KEY: "${TINYFISH_API_KEY:-}"
+      # Optional demo Basic Auth (both must be set to enable it).
+      DEMO_USER: "${DEMO_USER:-}"
+      DEMO_PASS: "${DEMO_PASS:-}"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
