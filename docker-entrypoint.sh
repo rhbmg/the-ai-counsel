@@ -3,6 +3,8 @@ set -eu
 
 # Fix data directory ownership so appuser can write settings/conversations.
 # Docker creates the mounted ./data dir as root at runtime; this corrects it.
+# mkdir -p also covers platforms (e.g. Render) with no volume mounted at all.
+mkdir -p /app/data
 chown -R appuser:appgroup /app/data
 
 CONFIG_FILE="${FRONTEND_DIST_DIR:-/app/frontend/dist}/config.js"
