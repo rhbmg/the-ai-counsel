@@ -1,9 +1,19 @@
 """NVIDIA Build (NIM) provider — OpenAI-compatible at integrate.api.nvidia.com."""
 
+import asyncio
+import logging
 import httpx
 from typing import List, Dict, Any
 from .base import LLMProvider
 from ..settings import get_settings
+
+logger = logging.getLogger(__name__)
+
+# NVIDIA's free-tier keys reject concurrent requests with 429, which happens
+# routinely when the council queries several members at once. Retry with
+# backoff instead of surfacing a hard failure on the first collision.
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 2.0  # seconds
 
 
 class NvidiaProvider(LLMProvider):
@@ -23,33 +33,50 @@ class NvidiaProvider(LLMProvider):
 
         model = model_id.removeprefix("nvidia:")
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    f"{self.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                    },
-                )
+        for attempt in range(MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "messages": messages,
+                            "temperature": temperature,
+                        },
+                    )
 
-                if response.status_code != 200:
-                    return {
-                        "error": True,
-                        "error_message": f"NVIDIA API error: {response.status_code} - {response.text}",
-                    }
+                    if response.status_code == 429:
+                        if attempt < MAX_RETRIES - 1:
+                            retry_delay = INITIAL_RETRY_DELAY * (2 ** attempt)
+                            logger.info(
+                                "Rate limited on nvidia:%s, retrying in %.1fs (attempt %d/%d)",
+                                model, retry_delay, attempt + 1, MAX_RETRIES,
+                            )
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        return {
+                            "error": True,
+                            "error_message": f"NVIDIA API rate-limited nvidia:{model} after {MAX_RETRIES} attempts",
+                        }
 
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return {"content": content, "usage": data.get("usage"), "error": False}
+                    if response.status_code != 200:
+                        return {
+                            "error": True,
+                            "error_message": f"NVIDIA API error: {response.status_code} - {response.text}",
+                        }
 
-        except Exception as e:
-            return {"error": True, "error_message": str(e)}
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return {"content": content, "usage": data.get("usage"), "error": False}
+
+            except Exception as e:
+                return {"error": True, "error_message": str(e)}
+
+        return {"error": True, "error_message": f"NVIDIA API request failed after {MAX_RETRIES} attempts"}
 
     async def get_models(self) -> List[Dict[str, Any]]:
         """Fetch available chat models from the NVIDIA NIM catalog."""
